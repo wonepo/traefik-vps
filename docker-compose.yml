@@ -1,0 +1,124 @@
+version: "3.3"
+
+secrets:
+  cf_key:
+    file: "./secrets/cf_key.secret"
+  cf_email:
+    file: "./secrets/cf_email.secret"
+
+services:
+
+  traefik:
+    image: "traefik:v2.10"
+    container_name: "traefik"  
+    restart: always                # ceci
+    security_opt:                  # ceci 
+      - no-new-privileges:true    
+    command:
+      #- "--log.level=DEBUG"
+      #- "--api.insecure=true"
+      - "--api"
+
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+
+      - "--certificatesresolvers.myresolver.acme.dnschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare"
+      #- "--certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.myresolver.acme.email={EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    labels:
+      # Dashboard
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN1}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.tls.certresolver=myresolver"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${AUTH}" # user/password
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    secrets:
+      - "cf_key"
+      - "cf_email"
+    environment:
+      - "CF_API_EMAIL_FILE=/run/secrets/cf_email"
+      - "CF_API_KEY_FILE=/run/secrets/cf_key"   
+    volumes:
+      - "./letsencrypt:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      
+      - /etc/localtime:/etc/localtime:ro
+      #- ./traefik.yml:/etc/traefik.yml:ro # etc/traefik
+      # Add folder with dynamic configuration yml
+      #- ./dynamic.yml:/dynamic.yml
+
+  whoami:
+    image: "traefik/whoami"
+    container_name: "simple-service"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${DOMAIN1}`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls.certresolver=myresolver"
+
+  svc-saha-server:
+    image: "nginx:stable-alpine3.17"
+    container_name: "saha.server"
+    volumes:
+      - ./content-saha:/usr/share/nginx/html:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.svc-saha-server.rule=Host(`${DOMAIN1}`) || Host(`www.${DOMAIN1}`)"
+      - "traefik.http.routers.svc-saha-server.entrypoints=websecure"
+      - "traefik.http.routers.svc-saha-server.tls.certresolver=myresolver"
+
+  svc-excelsiors-server:
+    image: "nginx:stable-alpine3.17"
+    container_name: "excelsiors.server"
+    volumes:
+      - ./content-excelsiors:/usr/share/nginx/html:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.svc-excelsiors-server.rule=Host(`${DOMAIN2}`) || Host(`www.${DOMAIN2}`)"
+      - "traefik.http.routers.svc-excelsiors-server.entrypoints=websecure"
+      - "traefik.http.routers.svc-excelsiors-server.tls.certresolver=myresolver"
+
+  svc-portainer:
+    image: portainer/portainer-ce:latest
+    command: -H unix:///var/run/docker.sock
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    labels:
+      # Frontend
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`portainer.${DOMAIN1}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.services.frontend.loadbalancer.server.port=9000"
+      - "traefik.http.routers.frontend.service=frontend"
+      - "traefik.http.routers.frontend.tls.certresolver=myresolver"
+      # Edge
+      - "traefik.http.routers.edge.rule=Host(`edge.${DOMAIN1}`)"
+      - "traefik.http.routers.edge.entrypoints=websecure"
+      - "traefik.http.services.edge.loadbalancer.server.port=8000"
+      - "traefik.http.routers.edge.service=edge"
+      - "traefik.http.routers.edge.tls.certresolver=myresolver"
+
+volumes:
+  portainer_data:
+
+  #svc-vnc-mt4:
+  #  image: rsolano/alpine-vnc
+  #  container_name: "alpine-vnc"
+  #  volumes:
+  #    -. /workspace:/home/alpine/workspace
